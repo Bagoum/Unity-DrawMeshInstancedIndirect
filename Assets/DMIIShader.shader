@@ -30,17 +30,17 @@
 				float2 uv	: TEXCOORD0;
 				UNITY_VERTEX_INPUT_INSTANCE_ID
 			};
-
-	#ifdef UNITY_PROCEDURAL_INSTANCING_ENABLED
-			StructuredBuffer<float2> positionBuffer;
-			StructuredBuffer<float2> directionBuffer;
-			StructuredBuffer<float> timeBuffer;
-	#endif
 			
-			void setup() {
+			CBUFFER_START(MyData)
+			    float4 posDirBuffer[7];
+			    float timeBuffer[7];
+			CBUFFER_END
+			
 	#ifdef UNITY_PROCEDURAL_INSTANCING_ENABLED
-				float2 position = positionBuffer[unity_InstanceID];
-				float2 direction = directionBuffer[unity_InstanceID];
+			void setup() {
+				float2 position = posDirBuffer[unity_InstanceID].xy;
+				float2 direction = posDirBuffer[unity_InstanceID].zw;
+				direction *= smoothstep(0, 10, timeBuffer[unity_InstanceID]);
 
 				unity_ObjectToWorld = float4x4(
 					direction.x, -direction.y, 0, position.x,
@@ -48,9 +48,8 @@
 					0, 0, 1, 0,
 					0, 0, 0, 1
 					);
-
-	#endif
 			}
+	#endif
 
 			sampler2D _MainTex;
 			float _FadeInT;
@@ -68,7 +67,7 @@
 			float4 frag(fragment f) : SV_Target{
 				UNITY_SETUP_INSTANCE_ID(f);
 				float4 c = tex2D(_MainTex, f.uv);
-	#ifdef UNITY_PROCEDURAL_INSTANCING_ENABLED
+	#if defined(UNITY_PROCEDURAL_INSTANCING_ENABLED) || defined(UNITY_INSTANCING_ENABLED)
 				c.a *= smoothstep(0.0, _FadeInT, timeBuffer[unity_InstanceID]);
 	#endif
 				return c;

@@ -52,18 +52,13 @@ public class ManyObjectHolder : MonoBehaviour {
             time += dT;
         }
     }
-    private static readonly int positionPropertyId = Shader.PropertyToID("positionBuffer");
-    private static readonly int directionPropertyId = Shader.PropertyToID("directionBuffer");
+    private static readonly int posDirPropertyId = Shader.PropertyToID("posDirBuffer");
     private static readonly int timePropertyId = Shader.PropertyToID("timeBuffer");
     
     private MaterialPropertyBlock pb;
-    private static readonly ComputeBufferPool fCBP = new ComputeBufferPool(batchSize, 4, ComputeBufferType.Default);
-    private static readonly ComputeBufferPool v2CBP = new ComputeBufferPool(batchSize, 8, ComputeBufferType.Default);
-    private static readonly ComputeBufferPool argsCBP = new ComputeBufferPool(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
-    private readonly Vector2[] posArr = new Vector2[batchSize];
-    private readonly Vector2[] dirArr = new Vector2[batchSize];
+    private readonly Vector4[] posDirArr = new Vector4[batchSize];
     private readonly float[] timeArr = new float[batchSize];
-    private readonly uint[] args = new uint[] { 0, 0, 0, 0, 0 };
+    private readonly Matrix4x4[] posMatrixArr = new Matrix4x4[batchSize];
     private const int batchSize = 7;
     public int instanceCount;
     
@@ -92,42 +87,40 @@ public class ManyObjectHolder : MonoBehaviour {
         }
     }
 
+    private float Smoothstep(float low, float high, float t) {
+        t = Mathf.Clamp01((t - low) / (high - low));
+        return t * t * (3 - 2 * t);
+    }
     private void RenderMe(Camera c) {
         if (!Application.isPlaying) { return; }
-        fCBP.Flush();
-        v2CBP.Flush();
-        argsCBP.Flush();
-        args[0] = ri.mesh.GetIndexCount(0);
         for (int done = 0; done < instanceCount; done += batchSize) {
             int run = Math.Min(instanceCount - done, batchSize);
-            args[1] = (uint)run;
             for (int batchInd = 0; batchInd < run; ++batchInd) {
                 var obj = objects[done + batchInd];
-                posArr[batchInd] = obj.position;
-                dirArr[batchInd] = new Vector2(Mathf.Cos(obj.rotation) * obj.scale, Mathf.Sin(obj.rotation) * obj.scale);
+                posDirArr[batchInd] = new Vector4(obj.position.x, obj.position.y, 
+                    Mathf.Cos(obj.rotation) * obj.scale, Mathf.Sin(obj.rotation) * obj.scale);
                 timeArr[batchInd] = obj.time;
+                ref var m = ref posMatrixArr[batchInd];
+
+                var scale = obj.scale * Smoothstep(0, 10, obj.time);
+                m.m00 = m.m11 = Mathf.Cos(obj.rotation) * scale;
+                m.m01 = -(m.m10 = Mathf.Sin(obj.rotation) * scale);
+                m.m22 = m.m33 = 1;
+                m.m03 = obj.position.x;
+                m.m13 = obj.position.y;
             }
-            var posCB = v2CBP.Rent();
-            var dirCB = v2CBP.Rent();
-            var timeCB = fCBP.Rent();
-            posCB.SetData(posArr, 0, 0, run);
-            dirCB.SetData(dirArr, 0, 0, run);
-            timeCB.SetData(timeArr, 0, 0, run);
-            pb.SetBuffer(positionPropertyId, posCB);
-            pb.SetBuffer(directionPropertyId, dirCB);
-            pb.SetBuffer(timePropertyId, timeCB);
-            var argsCB = argsCBP.Rent();
-            argsCB.SetData(args);
-            CallRender(c, argsCB);
+            pb.SetVectorArray(posDirPropertyId, posDirArr);
+            pb.SetFloatArray(timePropertyId, timeArr);
+            //CallRender(c, run);
+            CallLegacyRender(c, run);
         }
     }
     
     
-    private void CallRender(Camera c, ComputeBuffer argsBuffer) {
-        Graphics.DrawMeshInstancedIndirect(ri.mesh, 0, ri.mat,
+    private void CallRender(Camera c, int count) {
+        Graphics.DrawMeshInstancedProcedural(ri.mesh, 0, ri.mat,
             bounds: new Bounds(Vector3.zero, Vector3.one * 1000f),
-            bufferWithArgs: argsBuffer,
-            argsOffset: 0,
+            count: count,
             properties: pb,
             castShadows: ShadowCastingMode.Off,
             receiveShadows: false,
@@ -135,10 +128,15 @@ public class ManyObjectHolder : MonoBehaviour {
             camera: c);
     }
 
-    private void OnDestroy() {
-        Debug.Log("Cleaning up compute buffers");
-        fCBP.Dispose();
-        v2CBP.Dispose();
-        argsCBP.Dispose();
+    //Use this for legacy GPU support or WebGL support
+    private void CallLegacyRender(Camera c, int count) {
+        Graphics.DrawMeshInstanced(ri.mesh, 0, ri.mat,
+            posMatrixArr,
+            count: count,
+            properties: pb,
+            castShadows: ShadowCastingMode.Off,
+            receiveShadows: false,
+            layer: layerRender,
+            camera: c);
     }
 }
